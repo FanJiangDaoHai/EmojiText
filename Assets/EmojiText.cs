@@ -4,295 +4,299 @@ using System.Text.RegularExpressions;
 using UnityEngine;
 using UnityEngine.UI;
 
-public class EmojiText : Text
+namespace UI
 {
-    private static readonly Regex m_SpriteTagRegex =
-        new Regex(@"<quad.*?/>", RegexOptions.Singleline);
-
-    private static readonly Regex m_DisplayKeyRegex =
-        new Regex(@"displaykey=([\d,]+)", RegexOptions.Singleline);
-
-    private static readonly Regex m_SizeRegex =
-        new Regex(@"size=(\d*\.?\d+%?)", RegexOptions.Singleline);
-
-    private static readonly Regex m_WidthRegex =
-        new Regex(@"width=(\d*\.?\d+%?)", RegexOptions.Singleline);
-
-    private static readonly Regex m_HeightRegex =
-        new Regex(@"height=(\d*\.?\d+%?)", RegexOptions.Singleline);
-
-    private static readonly Regex m_RemoveRegex =
-        new Regex(
-            @"<b>|</b>|<i>|</i>|<size=.*?>|</size>|<color=.*?>|</color>|<material=.*?>|</material>|<a href=([^>\n\s]+)>|</a>|\s",
-            RegexOptions.Singleline);
-
-    readonly UIVertex[] m_TempVerts = new UIVertex[4];
-
-    protected override void OnPopulateMesh(VertexHelper toFill)
+    public class EmojiText : Text
     {
-        if (font == null)
-            return;
+        private static readonly Regex m_SpriteTagRegex =
+            new Regex(@"<quad.*?/>", RegexOptions.Singleline);
 
-        m_HaveChange = true;
+        private static readonly Regex m_DisplayKeyRegex =
+            new Regex(@"displaykey=([\d,]+)", RegexOptions.Singleline);
 
-        UpdateImageInfo();
-        m_ImageRectInfos.Clear();
-        m_DisableFontTextureRebuiltCallback = true;
+        private static readonly Regex m_SizeRegex =
+            new Regex(@"size=(\d*\.?\d+%?)", RegexOptions.Singleline);
 
-        Vector2 extents = rectTransform.rect.size;
+        private static readonly Regex m_WidthRegex =
+            new Regex(@"width=(\d*\.?\d+%?)", RegexOptions.Singleline);
 
-        var settings = GetGenerationSettings(extents);
-        cachedTextGenerator.PopulateWithErrors(text, settings, gameObject);
+        private static readonly Regex m_HeightRegex =
+            new Regex(@"height=(\d*\.?\d+%?)", RegexOptions.Singleline);
 
-        // Apply the offset to the vertices
-        IList<UIVertex> verts = cachedTextGenerator.verts;
-        float unitsPerPixel = 1 / pixelsPerUnit;
-        int vertCount = verts.Count;
+        private static readonly Regex m_RemoveRegex =
+            new Regex(
+                @"<b>|</b>|<i>|</i>|<size=.*?>|</size>|<color=.*?>|</color>|<material=.*?>|</material>|<a href=([^>\n\s]+)>|</a>|\s",
+                RegexOptions.Singleline);
 
-        // We have no verts to process just return (case 1037923)
-        if (vertCount <= 0)
+        readonly UIVertex[] m_TempVerts = new UIVertex[4];
+
+        protected override void OnPopulateMesh(VertexHelper toFill)
         {
+            if (font == null)
+                return;
+
+            m_HaveChange = true;
+
+            UpdateImageInfo();
+            m_ImageRectInfos.Clear();
+            m_DisableFontTextureRebuiltCallback = true;
+
+            Vector2 extents = rectTransform.rect.size;
+
+            var settings = GetGenerationSettings(extents);
+            cachedTextGenerator.PopulateWithErrors(text, settings, gameObject);
+
+            // Apply the offset to the vertices
+            IList<UIVertex> verts = cachedTextGenerator.verts;
+            float unitsPerPixel = 1 / pixelsPerUnit;
+            int vertCount = verts.Count;
+
+            // We have no verts to process just return (case 1037923)
+            if (vertCount <= 0)
+            {
+                toFill.Clear();
+                return;
+            }
+
+            Vector2 roundingOffset = new Vector2(verts[0].position.x, verts[0].position.y) * unitsPerPixel;
+            roundingOffset = PixelAdjustPoint(roundingOffset) - roundingOffset;
             toFill.Clear();
-            return;
+            for (int i = 0; i < vertCount; ++i)
+            {
+                var index = i / 4;
+                if (m_Images.TryGetValue(index, out var imageInfo))
+                {
+                    if (i % 4 != 3) continue;
+                    var pos = verts[i].position;
+
+                    pos.x += roundingOffset.x;
+                    pos.y += roundingOffset.y;
+                    var bestScale = resizeTextForBestFit
+                        ? (float)cachedTextGenerator.fontSizeUsedForBestFit / fontSize
+                        : 1;
+                    var realFontSize = resizeTextForBestFit ? cachedTextGenerator.fontSizeUsedForBestFit : fontSize;
+                    //探索得经验公式，不是精确的，但是可以解决大部分情况（本身属于是Unity LineSpace Bug）
+                    var offsetY = ((imageInfo.sizeY * bestScale - realFontSize - 2) * 0.2f + 1) *
+                                  unitsPerPixel * lineSpacing;
+                    m_ImageRectInfos.Add(new ImageRectInfo()
+                    {
+                        OffsetY = Mathf.Max(0, offsetY),
+                        VertPosY = verts[i].position.y,
+                        Pos = new Vector2(pos.x + imageInfo.sizeX / 2 * bestScale,
+                            pos.y + imageInfo.sizeY / 2 * bestScale) * unitsPerPixel,
+                        Size = new Vector2(imageInfo.sizeX * bestScale, imageInfo.sizeY * bestScale) * unitsPerPixel,
+                    });
+                }
+            }
+
+            ResetOffsetY();
+            for (int i = 0; i < vertCount; i++)
+            {
+                var index = i / 4;
+                if (!m_Images.ContainsKey(index))
+                {
+                    int tempVertsIndex = i & 3;
+                    m_TempVerts[tempVertsIndex] = verts[i];
+                    m_TempVerts[tempVertsIndex].position *= unitsPerPixel;
+                    m_TempVerts[tempVertsIndex].position.x += roundingOffset.x;
+                    m_TempVerts[tempVertsIndex].position.y += roundingOffset.y;
+                    if (tempVertsIndex == 3)
+                    {
+                        var offsetY = GetOffsetY(m_TempVerts[tempVertsIndex].position.y);
+                        for (var index1 = 0; index1 < m_TempVerts.Length; index1++)
+                        {
+                            m_TempVerts[index1].position.y -= offsetY;
+                        }
+
+                        toFill.AddUIVertexQuad(m_TempVerts);
+                    }
+                }
+            }
+
+
+            m_DisableFontTextureRebuiltCallback = false;
         }
 
-        Vector2 roundingOffset = new Vector2(verts[0].position.x, verts[0].position.y) * unitsPerPixel;
-        roundingOffset = PixelAdjustPoint(roundingOffset) - roundingOffset;
-        toFill.Clear();
-        for (int i = 0; i < vertCount; ++i)
+        private float GetOffsetY(float y)
         {
-            var index = i / 4;
-            if (m_Images.TryGetValue(index, out var imageInfo))
+            for (var i = 0; i < m_ImageRectInfos.Count; i++)
             {
-                if (i % 4 != 3) continue;
-                var pos = verts[i].position;
-
-                pos.x += roundingOffset.x;
-                pos.y += roundingOffset.y;
-                var bestScale = resizeTextForBestFit
-                    ? (float)cachedTextGenerator.fontSizeUsedForBestFit / fontSize
-                    : 1;
-                var realFontSize = resizeTextForBestFit ? cachedTextGenerator.fontSizeUsedForBestFit : fontSize;
-                var offsetY = ((imageInfo.sizeY * bestScale - realFontSize - 2) * 0.2f + 1) *
-                              unitsPerPixel * lineSpacing;
-                m_ImageRectInfos.Add(new ImageRectInfo()
+                var info = m_ImageRectInfos[i];
+                if (Mathf.Abs(info.VertPosY - y) < fontSize)
                 {
-                    OffsetY = Mathf.Max(0, offsetY),
-                    VertPosY = verts[i].position.y,
-                    Pos = new Vector2(pos.x + imageInfo.sizeX / 2 * bestScale,
-                        pos.y + imageInfo.sizeY / 2 * bestScale) * unitsPerPixel,
-                    Size = new Vector2(imageInfo.sizeX * bestScale, imageInfo.sizeY * bestScale) * unitsPerPixel,
-                });
+                    return info.OffsetY;
+                }
+            }
+
+            return 0;
+        }
+
+        /// <summary>
+        /// 选取同一行图片中最大的offsetY
+        /// </summary>
+        private void ResetOffsetY()
+        {
+            var realFontSize = resizeTextForBestFit ? cachedTextGenerator.fontSizeUsedForBestFit : fontSize;
+            for (var i = 0; i < m_ImageRectInfos.Count; i++)
+            {
+                for (int j = i + 1; j < m_ImageRectInfos.Count; j++)
+                {
+                    var info1 = m_ImageRectInfos[i];
+                    var info2 = m_ImageRectInfos[j];
+                    if (Mathf.Abs(info2.VertPosY - info1.VertPosY) < realFontSize)
+                    {
+                        var max = info1.OffsetY > info2.OffsetY ? info1.OffsetY : info2.OffsetY;
+                        info1.OffsetY = max;
+                        info2.OffsetY = max;
+                        m_ImageRectInfos[i] = info1;
+                        m_ImageRectInfos[j] = info2;
+                    }
+                }
             }
         }
 
-        ResetOffsetY();
-        for (int i = 0; i < vertCount; i++)
+
+        private void LateUpdate()
         {
-            var index = i / 4;
-            if (!m_Images.ContainsKey(index))
+            UpdateQuad();
+        }
+
+        void UpdateQuad()
+        {
+            if (!supportRichText)
             {
-                int tempVertsIndex = i & 3;
-                m_TempVerts[tempVertsIndex] = verts[i];
-                m_TempVerts[tempVertsIndex].position *= unitsPerPixel;
-                m_TempVerts[tempVertsIndex].position.x += roundingOffset.x;
-                m_TempVerts[tempVertsIndex].position.y += roundingOffset.y;
-                if (tempVertsIndex == 3)
+                for (int i = m_ImagesPool.Count - 1; i > -1; i--)
                 {
-                    var offsetY = GetOffsetY(m_TempVerts[tempVertsIndex].position.y);
-                    for (var index1 = 0; index1 < m_TempVerts.Length; index1++)
+                    if (Application.isEditor)
                     {
-                        m_TempVerts[index1].position.y -= offsetY;
+                        DestroyImmediate(m_ImagesPool[i].gameObject);
+                    }
+                    else
+                    {
+                        Destroy(m_ImagesPool[i].gameObject);
                     }
 
-                    toFill.AddUIVertexQuad(m_TempVerts);
+                    m_ImagesPool.RemoveAt(i);
                 }
+
+                return;
             }
-        }
 
-
-        m_DisableFontTextureRebuiltCallback = false;
-    }
-
-    private float GetOffsetY(float y)
-    {
-        for (var i = 0; i < m_ImageRectInfos.Count; i++)
-        {
-            var info = m_ImageRectInfos[i];
-            if (Mathf.Abs(info.VertPosY - y) < fontSize)
+            if (!m_HaveChange)
+                return;
+            var count = m_SpriteTagRegex.Matches(text).Count;
+            GetComponentsInChildren<Image>(true, m_ImagesPool);
+            if (m_ImagesPool.Count < count)
             {
-                return info.OffsetY;
-            }
-        }
-
-        return 0;
-    }
-
-    /// <summary>
-    /// 选取同一行图片中最大的offsetY
-    /// </summary>
-    private void ResetOffsetY()
-    {
-        var realFontSize = resizeTextForBestFit ? cachedTextGenerator.fontSizeUsedForBestFit : fontSize;
-        for (var i = 0; i < m_ImageRectInfos.Count; i++)
-        {
-            for (int j = i + 1; j < m_ImageRectInfos.Count; j++)
-            {
-                var info1 = m_ImageRectInfos[i];
-                var info2 = m_ImageRectInfos[j];
-                if (Mathf.Abs(info2.VertPosY - info1.VertPosY) < realFontSize)
+                for (var i = m_ImagesPool.Count; i < count; i++)
                 {
-                    var max = info1.OffsetY > info2.OffsetY ? info1.OffsetY : info2.OffsetY;
-                    info1.OffsetY = max;
-                    info2.OffsetY = max;
-                    m_ImageRectInfos[i] = info1;
-                    m_ImageRectInfos[j] = info2;
+                    DefaultControls.Resources resources = new DefaultControls.Resources();
+                    GameObject go = DefaultControls.CreateImage(resources);
+
+                    go.layer = gameObject.layer;
+
+                    RectTransform rt = go.transform as RectTransform;
+
+                    if (rt)
+                    {
+                        rt.SetParent(rectTransform);
+                        rt.anchoredPosition3D = Vector3.zero;
+                        rt.localRotation = Quaternion.identity;
+                        rt.localScale = Vector3.one;
+                    }
+
+                    Image imgCom = go.GetComponent<Image>();
+                    imgCom.enabled = false;
+
+                    m_ImagesPool.Add(imgCom);
                 }
             }
-        }
-    }
 
-
-    private void LateUpdate()
-    {
-        UpdateQuad();
-    }
-
-    void UpdateQuad()
-    {
-        if (!supportRichText)
-        {
             for (int i = m_ImagesPool.Count - 1; i > -1; i--)
             {
-                if (Application.isEditor)
+                if (i >= count)
                 {
-                    DestroyImmediate(m_ImagesPool[i].gameObject);
-                }
-                else
-                {
-                    Destroy(m_ImagesPool[i].gameObject);
-                }
+                    if (Application.isEditor)
+                    {
+                        DestroyImmediate(m_ImagesPool[i].gameObject);
+                    }
+                    else
+                    {
+                        Destroy(m_ImagesPool[i].gameObject);
+                    }
 
-                m_ImagesPool.RemoveAt(i);
+                    m_ImagesPool.RemoveAt(i);
+                }
             }
 
-            return;
-        }
-
-        if (!m_HaveChange)
-            return;
-        var count = m_SpriteTagRegex.Matches(text).Count;
-        GetComponentsInChildren<Image>(true, m_ImagesPool);
-        if (m_ImagesPool.Count < count)
-        {
-            for (var i = m_ImagesPool.Count; i < count; i++)
+            foreach (var imagesValue in m_Images.Values)
             {
-                DefaultControls.Resources resources = new DefaultControls.Resources();
-                GameObject go = DefaultControls.CreateImage(resources);
-
-                go.layer = gameObject.layer;
-
-                RectTransform rt = go.transform as RectTransform;
-
-                if (rt)
-                {
-                    rt.SetParent(rectTransform);
-                    rt.anchoredPosition3D = Vector3.zero;
-                    rt.localRotation = Quaternion.identity;
-                    rt.localScale = Vector3.one;
-                }
-
-                Image imgCom = go.GetComponent<Image>();
-                imgCom.enabled = false;
-
-                m_ImagesPool.Add(imgCom);
+                var index = imagesValue.PoolIndex;
+                var image = m_ImagesPool[index];
+                image.enabled = true;
+                image.rectTransform.sizeDelta = m_ImageRectInfos[index].Size;
+                image.rectTransform.anchoredPosition =
+                    m_ImageRectInfos[index].Pos - Vector2.up * m_ImageRectInfos[index].OffsetY;
             }
+
+            m_HaveChange = false;
         }
 
-        for (int i = m_ImagesPool.Count - 1; i > -1; i--)
+        void UpdateImageInfo()
         {
-            if (i >= count)
+            if (!supportRichText) return;
+            m_Images.Clear();
+            var totalLen = 0;
+            var newText = m_RemoveRegex.Replace(text, "");
+            var matches = m_SpriteTagRegex.Matches(newText);
+            for (var i = 0; i < matches.Count; i++)
             {
-                if (Application.isEditor)
+                var match = matches[i];
+                var index = match.Index - totalLen;
+                totalLen += match.Length - 1;
+                var matchValue = match.Value;
+                var displayKeys = m_DisplayKeyRegex.Match(matchValue).Groups[1].Value.Split(',').ToList();
+                var sizeMatch = m_SizeRegex.Match(matchValue);
+                var size = sizeMatch.Success ? float.Parse(sizeMatch.Groups[1].Value) : fontSize;
+                var widthMatch = m_WidthRegex.Match(matchValue);
+                var width = widthMatch.Success ? float.Parse(widthMatch.Groups[1].Value) : 1;
+                var heightMatch = m_HeightRegex.Match(matchValue);
+                var height = heightMatch.Success ? float.Parse(heightMatch.Groups[1].Value) : 1;
+                var imageInfo = new ImageInfo()
                 {
-                    DestroyImmediate(m_ImagesPool[i].gameObject);
-                }
-                else
-                {
-                    Destroy(m_ImagesPool[i].gameObject);
-                }
-
-                m_ImagesPool.RemoveAt(i);
+                    DisplayKeys = displayKeys,
+                    Size = size,
+                    Width = width,
+                    Height = height,
+                    PoolIndex = i,
+                };
+                m_Images.Add(index, imageInfo);
             }
         }
 
-        foreach (var imagesValue in m_Images.Values)
+
+        private Dictionary<int, ImageInfo> m_Images = new Dictionary<int, ImageInfo>();
+        private List<Image> m_ImagesPool = new List<Image>();
+        private List<ImageRectInfo> m_ImageRectInfos = new List<ImageRectInfo>();
+        private bool m_HaveChange;
+
+        private struct ImageInfo
         {
-            var index = imagesValue.PoolIndex;
-            var image = m_ImagesPool[index];
-            image.enabled = true;
-            image.rectTransform.sizeDelta = m_ImageRectInfos[index].Size;
-            image.rectTransform.anchoredPosition =
-                m_ImageRectInfos[index].Pos - Vector2.up * m_ImageRectInfos[index].OffsetY;
+            public List<string> DisplayKeys;
+            public float Size;
+            public float Width;
+            public float Height;
+            public int PoolIndex;
+            public float sizeX => Size * (Width / Height);
+            public float sizeY => Size;
         }
 
-        m_HaveChange = false;
-    }
-
-    void UpdateImageInfo()
-    {
-        if (!supportRichText) return;
-        m_Images.Clear();
-        var totalLen = 0;
-        var newText = m_RemoveRegex.Replace(text, "");
-        var matches = m_SpriteTagRegex.Matches(newText);
-        for (var i = 0; i < matches.Count; i++)
+        private struct ImageRectInfo
         {
-            var match = matches[i];
-            var index = match.Index - totalLen;
-            totalLen += match.Length - 1;
-            var matchValue = match.Value;
-            var displayKeys = m_DisplayKeyRegex.Match(matchValue).Groups[1].Value.Split(',').ToList();
-            var sizeMatch = m_SizeRegex.Match(matchValue);
-            var size = sizeMatch.Success ? float.Parse(sizeMatch.Groups[1].Value) : fontSize;
-            var widthMatch = m_WidthRegex.Match(matchValue);
-            var width = widthMatch.Success ? float.Parse(widthMatch.Groups[1].Value) : 1;
-            var heightMatch = m_HeightRegex.Match(matchValue);
-            var height = heightMatch.Success ? float.Parse(heightMatch.Groups[1].Value) : 1;
-            var imageInfo = new ImageInfo()
-            {
-                DisplayKeys = displayKeys,
-                Size = size,
-                Width = width,
-                Height = height,
-                PoolIndex = i,
-            };
-            m_Images.Add(index, imageInfo);
+            public float OffsetY;
+            public float VertPosY;
+            public Vector2 Size;
+            public Vector2 Pos;
         }
-    }
-
-
-    private Dictionary<int, ImageInfo> m_Images = new Dictionary<int, ImageInfo>();
-    private List<Image> m_ImagesPool = new List<Image>();
-    private List<ImageRectInfo> m_ImageRectInfos = new List<ImageRectInfo>();
-    private bool m_HaveChange;
-
-    private struct ImageInfo
-    {
-        public List<string> DisplayKeys;
-        public float Size;
-        public float Width;
-        public float Height;
-        public int PoolIndex;
-        public float sizeX => Size * (Width / Height);
-        public float sizeY => Size;
-    }
-
-    private struct ImageRectInfo
-    {
-        public float OffsetY;
-        public float VertPosY;
-        public Vector2 Size;
-        public Vector2 Pos;
     }
 }
