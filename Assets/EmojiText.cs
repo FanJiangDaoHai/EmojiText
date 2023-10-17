@@ -1,9 +1,6 @@
-using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
-using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -23,6 +20,11 @@ public class EmojiText : Text
 
     private static readonly Regex m_HeightRegex =
         new Regex(@"height=(\d*\.?\d+%?)", RegexOptions.Singleline);
+
+    private static readonly Regex m_RemoveRegex =
+        new Regex(
+            @"<b>|</b>|<i>|</i>|<size=.*?>|</size>|<color=.*?>|</color>|<material=.*?>|</material>|<a href=([^>\n\s]+)>|</a>|\s",
+            RegexOptions.Singleline);
 
     readonly UIVertex[] m_TempVerts = new UIVertex[4];
 
@@ -75,7 +77,7 @@ public class EmojiText : Text
                               unitsPerPixel * lineSpacing;
                 m_ImageRectInfos.Add(new ImageRectInfo()
                 {
-                    OffsetY = offsetY,
+                    OffsetY = Mathf.Max(0, offsetY),
                     VertPosY = verts[i].position.y,
                     Pos = new Vector2(pos.x + imageInfo.sizeX / 2 * bestScale,
                         pos.y + imageInfo.sizeY / 2 * bestScale) * unitsPerPixel,
@@ -146,7 +148,6 @@ public class EmojiText : Text
                     m_ImageRectInfos[i] = info1;
                     m_ImageRectInfos[j] = info2;
                 }
-                
             }
         }
     }
@@ -159,8 +160,27 @@ public class EmojiText : Text
 
     void UpdateQuad()
     {
-        // if (!m_HaveChange)
-        //     return;
+        if (!supportRichText)
+        {
+            for (int i = m_ImagesPool.Count - 1; i > -1; i--)
+            {
+                if (Application.isEditor)
+                {
+                    DestroyImmediate(m_ImagesPool[i].gameObject);
+                }
+                else
+                {
+                    Destroy(m_ImagesPool[i].gameObject);
+                }
+
+                m_ImagesPool.RemoveAt(i);
+            }
+
+            return;
+        }
+
+        if (!m_HaveChange)
+            return;
         var count = m_SpriteTagRegex.Matches(text).Count;
         GetComponentsInChildren<Image>(true, m_ImagesPool);
         if (m_ImagesPool.Count < count)
@@ -212,7 +232,8 @@ public class EmojiText : Text
             var image = m_ImagesPool[index];
             image.enabled = true;
             image.rectTransform.sizeDelta = m_ImageRectInfos[index].Size;
-            image.rectTransform.anchoredPosition = m_ImageRectInfos[index].Pos - Vector2.up * m_ImageRectInfos[index].OffsetY;
+            image.rectTransform.anchoredPosition =
+                m_ImageRectInfos[index].Pos - Vector2.up * m_ImageRectInfos[index].OffsetY;
         }
 
         m_HaveChange = false;
@@ -220,9 +241,11 @@ public class EmojiText : Text
 
     void UpdateImageInfo()
     {
+        if (!supportRichText) return;
         m_Images.Clear();
         var totalLen = 0;
-        var matches = m_SpriteTagRegex.Matches(text);
+        var newText = m_RemoveRegex.Replace(text, "");
+        var matches = m_SpriteTagRegex.Matches(newText);
         for (var i = 0; i < matches.Count; i++)
         {
             var match = matches[i];
