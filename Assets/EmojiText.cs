@@ -1,13 +1,17 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using UnityEngine;
+using UnityEngine.Pool;
 using UnityEngine.UI;
 
 namespace UI
 {
     public class EmojiText : Text
     {
+        public static Func<string, Sprite> OnGetSprite;
+
         private static readonly Regex m_SpriteTagRegex =
             new Regex(@"<quad.*?/>", RegexOptions.Singleline);
 
@@ -148,8 +152,6 @@ namespace UI
                         var max = info1.OffsetY > info2.OffsetY ? info1.OffsetY : info2.OffsetY;
                         info1.OffsetY = max;
                         info2.OffsetY = max;
-                        m_ImageRectInfos[i] = info1;
-                        m_ImageRectInfos[j] = info2;
                     }
                 }
             }
@@ -159,6 +161,7 @@ namespace UI
         private void LateUpdate()
         {
             UpdateQuad();
+            UpdateGif();
         }
 
         void UpdateQuad()
@@ -245,7 +248,11 @@ namespace UI
         void UpdateImageInfo()
         {
             if (!supportRichText) return;
-            m_Images.Clear();
+            foreach (var imagesValue in m_Images.Values)
+            {
+                m_ImageInfoPool.Release(imagesValue);
+            }
+            m_ImagesPool.Clear();
             var totalLen = 0;
             var newText = m_RemoveRegex.Replace(text, "");
             var matches = m_SpriteTagRegex.Matches(newText);
@@ -255,41 +262,111 @@ namespace UI
                 var index = match.Index - totalLen;
                 totalLen += match.Length - 1;
                 var matchValue = match.Value;
-                var displayKeys = m_DisplayKeyRegex.Match(matchValue).Groups[1].Value.Split(',').ToList();
+                var displayKeyMatch = m_DisplayKeyRegex.Match(matchValue);
                 var sizeMatch = m_SizeRegex.Match(matchValue);
                 var size = sizeMatch.Success ? float.Parse(sizeMatch.Groups[1].Value) : fontSize;
                 var widthMatch = m_WidthRegex.Match(matchValue);
                 var width = widthMatch.Success ? float.Parse(widthMatch.Groups[1].Value) : 1;
                 var heightMatch = m_HeightRegex.Match(matchValue);
                 var height = heightMatch.Success ? float.Parse(heightMatch.Groups[1].Value) : 1;
-                var imageInfo = new ImageInfo()
+                var imageInfo = m_ImageInfoPool.Get();
+                imageInfo.Size = size;
+                imageInfo.Width = width;
+                imageInfo.Height = height;
+                imageInfo.PoolIndex = i;
+                if (displayKeyMatch.Success)
                 {
-                    DisplayKeys = displayKeys,
-                    Size = size,
-                    Width = width,
-                    Height = height,
-                    PoolIndex = i,
-                };
+                    var displayKeys = displayKeyMatch.Groups[1].Value.Split(',');
+                    foreach (var displayKey in displayKeys)
+                    {
+                        imageInfo.Add(displayKey);
+                    }
+                }
                 m_Images.Add(index, imageInfo);
             }
         }
 
+        private void UpdateGif()
+        {
+            m_Time += Time.deltaTime;
+            if (m_Time > m_InvadeTime)
+            {
+                foreach (var imagesValue in m_Images.Values)
+                {
+                    var image = m_ImagesPool[imagesValue.PoolIndex];
+                    if (imagesValue.IsGif)
+                    {
+                        image.sprite = imagesValue.GetNextSprite();
+                    }
+                }
 
+                m_Time = 0;
+            }
+            
+        }
+
+
+        private float m_Time = 0;
+        private const float m_InvadeTime = 0.1f; 
         private Dictionary<int, ImageInfo> m_Images = new Dictionary<int, ImageInfo>();
         private List<Image> m_ImagesPool = new List<Image>();
         private List<ImageRectInfo> m_ImageRectInfos = new List<ImageRectInfo>();
         private bool m_HaveChange;
 
-        private struct ImageInfo
+        private static ObjectPool<ImageInfo> m_ImageInfoPool =
+            new ObjectPool<ImageInfo>(() => new ImageInfo(), null, info => info.Clear());
+
+        private class ImageInfo
         {
-            public List<string> DisplayKeys;
             public float Size;
             public float Width;
             public float Height;
             public int PoolIndex;
             public float sizeX => Size * (Width / Height);
             public float sizeY => Size;
+
+            public void Add(string displayKey)
+            {
+                m_DisplayKeys.Add(displayKey);
+                var sprite = OnGetSprite?.Invoke(displayKey);
+                if (sprite != null)
+                {
+                    m_Sprites.Add(sprite);
+                }
+            }
+
+            public void Clear()
+            {
+                m_DisplayKeys.Clear();
+                m_Sprites.Clear();
+                m_Index = 0;
+            }
+
+            public Sprite GetNextSprite()
+            {
+                if (m_Sprites.Count == 0) return null;
+                m_Index++;
+                if (m_Index >= m_Sprites.Count)
+                {
+                    m_Index = 0;
+                }
+                return m_Sprites[m_Index];
+            }
+
+            public Sprite GetFirstSprite()
+            {
+                if (m_Sprites.Count == 0) return null;
+                return m_Sprites[0];
+            }
+
+            public bool IsGif => m_Sprites.Count > 1;
+
+            private List<string> m_DisplayKeys = new List<string>();
+            private List<Sprite> m_Sprites = new List<Sprite>();
+
+            private int m_Index = 0;
         }
+
 
         private struct ImageRectInfo
         {
