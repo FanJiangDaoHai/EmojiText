@@ -2,14 +2,14 @@ using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.Pool;
 using UnityEngine.UI;
 
 namespace UI
 {
-    public class EmojiText : Text
+    public class EmojiText : Text, IPointerClickHandler
     {
-
         private static readonly Regex m_SpriteTagRegex =
             new Regex(@"<quad.*?/>", RegexOptions.Singleline);
 
@@ -25,10 +25,18 @@ namespace UI
         private static readonly Regex m_HeightRegex =
             new Regex(@"height=(\d*\.?\d+%?)", RegexOptions.Singleline);
 
-        private static readonly Regex m_RemoveRegex =
+        private static readonly Regex m_QuadRemoveRegex =
             new Regex(
                 @"<b>|</b>|<i>|</i>|<size=.*?>|</size>|<color=.*?>|</color>|<material=.*?>|</material>|<a href=([^>\n\s]+)>|</a>|\s",
                 RegexOptions.Singleline);
+
+        private static readonly Regex m_HrefRemoveRegex =
+            new Regex(
+                @"<b>|</b>|<i>|</i>|<size=.*?>|</size>|<color=.*?>|</color>|<material=.*?>|</material>|<quad.*?/>|\s",
+                RegexOptions.Singleline);
+
+        private static readonly Regex s_HrefRegex =
+            new Regex(@"<ahref=([^>\n\s]+)>(.*?)(</a>)", RegexOptions.Singleline);
 
         readonly UIVertex[] m_TempVerts = new UIVertex[4];
 
@@ -40,7 +48,7 @@ namespace UI
             m_HaveChange = true;
 
             UpdateImageInfo();
-            m_ImageRectInfos.Clear();
+            RefreshHrefInfo();
             m_DisableFontTextureRebuiltCallback = true;
 
             Vector2 extents = rectTransform.rect.size;
@@ -66,8 +74,9 @@ namespace UI
             for (int i = 0; i < vertCount; ++i)
             {
                 var index = i / 4;
-                if (m_Images.TryGetValue(index, out var imageInfo))
+                if (m_ImageIndexDict.TryGetValue(index, out var imageIndex))
                 {
+                    var imageInfo = m_ImageInfos[imageIndex];
                     if (i % 4 != 3) continue;
                     var pos = verts[i].position;
 
@@ -80,14 +89,13 @@ namespace UI
                     //探索得经验公式，不是精确的，但是可以解决大部分情况（本身属于是Unity LineSpace Bug）
                     var offsetY = ((imageInfo.sizeY * bestScale - realFontSize - 2) * 0.2f + 1) *
                                   unitsPerPixel * lineSpacing;
-                    m_ImageRectInfos.Add(new ImageRectInfo()
-                    {
-                        OffsetY = Mathf.Max(0, offsetY),
-                        VertPosY = verts[i].position.y,
-                        Pos = new Vector2(pos.x + imageInfo.sizeX / 2 * bestScale,
-                            pos.y + imageInfo.sizeY / 2 * bestScale) * unitsPerPixel,
-                        Size = new Vector2(imageInfo.sizeX * bestScale, imageInfo.sizeY * bestScale) * unitsPerPixel,
-                    });
+
+                    imageInfo.RectInfo.OffsetY = Mathf.Max(0, offsetY);
+                    imageInfo.RectInfo.VertPosY = verts[i].position.y;
+                    imageInfo.RectInfo.Pos = new Vector2(pos.x + imageInfo.sizeX / 2 * bestScale,
+                        pos.y + imageInfo.sizeY / 2 * bestScale) * unitsPerPixel;
+                    imageInfo.RectInfo.Size = new Vector2(imageInfo.sizeX * bestScale, imageInfo.sizeY * bestScale) *
+                                              unitsPerPixel;
                 }
             }
 
@@ -95,7 +103,7 @@ namespace UI
             for (int i = 0; i < vertCount; i++)
             {
                 var index = i / 4;
-                if (!m_Images.ContainsKey(index))
+                if (!m_ImageIndexDict.ContainsKey(index))
                 {
                     int tempVertsIndex = i & 3;
                     m_TempVerts[tempVertsIndex] = verts[i];
@@ -117,16 +125,25 @@ namespace UI
 
 
             m_DisableFontTextureRebuiltCallback = false;
+            RefreshHrefBox(toFill);
         }
+
+        private void LateUpdate()
+        {
+            UpdateQuad();
+            UpdateGif();
+        }
+
+        #region Quad
 
         private float GetOffsetY(float y)
         {
-            for (var i = 0; i < m_ImageRectInfos.Count; i++)
+            for (var i = 0; i < m_ImageInfos.Count; i++)
             {
-                var info = m_ImageRectInfos[i];
-                if (Mathf.Abs(info.VertPosY - y) < fontSize)
+                var info = m_ImageInfos[i];
+                if (Mathf.Abs(info.RectInfo.VertPosY - y) < fontSize)
                 {
-                    return info.OffsetY;
+                    return info.RectInfo.OffsetY;
                 }
             }
 
@@ -139,47 +156,41 @@ namespace UI
         private void ResetOffsetY()
         {
             var realFontSize = resizeTextForBestFit ? cachedTextGenerator.fontSizeUsedForBestFit : fontSize;
-            for (var i = 0; i < m_ImageRectInfos.Count; i++)
+            for (var i = 0; i < m_ImageInfos.Count; i++)
             {
-                for (int j = i + 1; j < m_ImageRectInfos.Count; j++)
+                for (int j = i + 1; j < m_ImageInfos.Count; j++)
                 {
-                    var info1 = m_ImageRectInfos[i];
-                    var info2 = m_ImageRectInfos[j];
-                    if (Mathf.Abs(info2.VertPosY - info1.VertPosY) < realFontSize)
+                    var info1 = m_ImageInfos[i];
+                    var info2 = m_ImageInfos[j];
+                    if (Mathf.Abs(info2.RectInfo.VertPosY - info1.RectInfo.VertPosY) < realFontSize)
                     {
-                        var max = info1.OffsetY > info2.OffsetY ? info1.OffsetY : info2.OffsetY;
-                        info1.OffsetY = max;
-                        info2.OffsetY = max;
-                        m_ImageRectInfos[i] = info1;
-                        m_ImageRectInfos[j] = info2;
+                        var max = info1.RectInfo.OffsetY > info2.RectInfo.OffsetY
+                            ? info1.RectInfo.OffsetY
+                            : info2.RectInfo.OffsetY;
+                        info1.RectInfo.OffsetY = max;
+                        info2.RectInfo.OffsetY = max;
                     }
                 }
             }
         }
 
 
-        private void LateUpdate()
-        {
-            UpdateQuad();
-            UpdateGif();
-        }
-
         void UpdateQuad()
         {
             if (!supportRichText)
             {
-                for (int i = m_ImagesPool.Count - 1; i > -1; i--)
+                for (int i = m_ImageObjects.Count - 1; i > -1; i--)
                 {
                     if (Application.isEditor)
                     {
-                        DestroyImmediate(m_ImagesPool[i].gameObject);
+                        DestroyImmediate(m_ImageObjects[i].gameObject);
                     }
                     else
                     {
-                        Destroy(m_ImagesPool[i].gameObject);
+                        Destroy(m_ImageObjects[i].gameObject);
                     }
 
-                    m_ImagesPool.RemoveAt(i);
+                    m_ImageObjects.RemoveAt(i);
                 }
 
                 return;
@@ -188,10 +199,10 @@ namespace UI
             if (!m_HaveChange)
                 return;
             var count = m_SpriteTagRegex.Matches(text).Count;
-            GetComponentsInChildren<Image>(true, m_ImagesPool);
-            if (m_ImagesPool.Count < count)
+            GetComponentsInChildren<Image>(true, m_ImageObjects);
+            if (m_ImageObjects.Count < count)
             {
-                for (var i = m_ImagesPool.Count; i < count; i++)
+                for (var i = m_ImageObjects.Count; i < count; i++)
                 {
                     DefaultControls.Resources resources = new DefaultControls.Resources();
                     GameObject go = DefaultControls.CreateImage(resources);
@@ -211,35 +222,35 @@ namespace UI
                     Image imgCom = go.GetComponent<Image>();
                     imgCom.enabled = false;
 
-                    m_ImagesPool.Add(imgCom);
+                    m_ImageObjects.Add(imgCom);
                 }
             }
 
-            for (int i = m_ImagesPool.Count - 1; i > -1; i--)
+            for (int i = m_ImageObjects.Count - 1; i > -1; i--)
             {
                 if (i >= count)
                 {
                     if (Application.isEditor)
                     {
-                        DestroyImmediate(m_ImagesPool[i].gameObject);
+                        DestroyImmediate(m_ImageObjects[i].gameObject);
                     }
                     else
                     {
-                        Destroy(m_ImagesPool[i].gameObject);
+                        Destroy(m_ImageObjects[i].gameObject);
                     }
 
-                    m_ImagesPool.RemoveAt(i);
+                    m_ImageObjects.RemoveAt(i);
                 }
             }
 
-            foreach (var imagesValue in m_Images.Values)
+            for (var i = 0; i < m_ImageInfos.Count; i++)
             {
-                var index = imagesValue.PoolIndex;
-                var image = m_ImagesPool[index];
+                var imagesValue = m_ImageInfos[i];
+                var image = m_ImageObjects[i];
                 image.enabled = true;
-                image.rectTransform.sizeDelta = m_ImageRectInfos[index].Size;
+                image.rectTransform.sizeDelta = imagesValue.RectInfo.Size;
                 image.rectTransform.anchoredPosition =
-                    m_ImageRectInfos[index].Pos - Vector2.up * m_ImageRectInfos[index].OffsetY;
+                    imagesValue.RectInfo.Pos - Vector2.up * imagesValue.RectInfo.OffsetY;
                 if (!imagesValue.IsGif)
                 {
                     image.sprite = imagesValue.GetFirstSprite();
@@ -252,14 +263,21 @@ namespace UI
         void UpdateImageInfo()
         {
             if (!supportRichText) return;
-            foreach (var imagesValue in m_Images.Values)
-            {
-                m_ImageInfoPool.Release(imagesValue);
-            }
-            m_Images.Clear();
+            m_ImageIndexDict.Clear();
             var totalLen = 0;
-            var newText = m_RemoveRegex.Replace(text, "");
+            var newText = m_QuadRemoveRegex.Replace(text, "");
             var matches = m_SpriteTagRegex.Matches(newText);
+            while (m_ImageInfos.Count < matches.Count)
+            {
+                m_ImageInfos.Add(m_ImageInfoPool.Get());
+            }
+
+            while (m_ImageInfos.Count > matches.Count)
+            {
+                m_ImageInfoPool.Release(m_ImageInfos[^1]);
+                m_ImageInfos.RemoveAt(m_ImageInfos.Count - 1);
+            }
+
             for (var i = 0; i < matches.Count; i++)
             {
                 var match = matches[i];
@@ -273,11 +291,10 @@ namespace UI
                 var width = widthMatch.Success ? float.Parse(widthMatch.Groups[1].Value) : 1;
                 var heightMatch = m_HeightRegex.Match(matchValue);
                 var height = heightMatch.Success ? float.Parse(heightMatch.Groups[1].Value) : 1;
-                var imageInfo = m_ImageInfoPool.Get();
+                var imageInfo = m_ImageInfos[i];
                 imageInfo.Size = size;
                 imageInfo.Width = width;
                 imageInfo.Height = height;
-                imageInfo.PoolIndex = i;
                 if (displayKeyMatch.Success)
                 {
                     var displayKeys = displayKeyMatch.Groups[1].Value.Split(',');
@@ -286,18 +303,20 @@ namespace UI
                         imageInfo.Add(displayKey);
                     }
                 }
-                m_Images.Add(index, imageInfo);
+
+                m_ImageIndexDict.Add(index, i);
             }
         }
 
         private void UpdateGif()
         {
             m_Time += Time.deltaTime;
-            if (m_Time > m_InvadeTime)
+            if (m_Time > m_GifInvadeTime)
             {
-                foreach (var imagesValue in m_Images.Values)
+                for (var index = 0; index < m_ImageInfos.Count; index++)
                 {
-                    var image = m_ImagesPool[imagesValue.PoolIndex];
+                    var imagesValue = m_ImageInfos[index];
+                    var image = m_ImageObjects[index];
                     if (imagesValue.IsGif)
                     {
                         image.sprite = imagesValue.GetNextSprite();
@@ -306,18 +325,17 @@ namespace UI
 
                 m_Time = 0;
             }
-            
         }
 
 
         private float m_Time = 0;
-        private const float m_InvadeTime = 0.1f; 
-        private Dictionary<int, ImageInfo> m_Images = new Dictionary<int, ImageInfo>();
-        private List<Image> m_ImagesPool = new List<Image>();
-        private List<ImageRectInfo> m_ImageRectInfos = new List<ImageRectInfo>();
+        private const float m_GifInvadeTime = 0.1f;
+        private readonly Dictionary<int, int> m_ImageIndexDict = new Dictionary<int, int>();
+        private readonly List<ImageInfo> m_ImageInfos = new List<ImageInfo>();
+        private readonly List<Image> m_ImageObjects = new List<Image>();
         private bool m_HaveChange;
 
-        private static ObjectPool<ImageInfo> m_ImageInfoPool =
+        private static readonly ObjectPool<ImageInfo> m_ImageInfoPool =
             new ObjectPool<ImageInfo>(() => new ImageInfo(), null, info => info.Clear());
 
         private class ImageInfo
@@ -325,9 +343,10 @@ namespace UI
             public float Size;
             public float Width;
             public float Height;
-            public int PoolIndex;
             public float sizeX => Size * (Width / Height);
             public float sizeY => Size;
+
+            public ImageRectInfo RectInfo = new ImageRectInfo();
 
             public void Add(string displayKey)
             {
@@ -337,10 +356,11 @@ namespace UI
                 {
                     sprite = AssetDatabase.LoadAssetAtPath<Sprite>($"Assets/Resources/{displayKey}.png");
                 }
-                else if(Application.isPlaying)
+                else if (Application.isPlaying)
                 {
                     sprite = Resources.Load<Sprite>(displayKey);
                 }
+
                 if (sprite != null)
                 {
                     m_Sprites.Add(sprite);
@@ -362,6 +382,7 @@ namespace UI
                 {
                     m_Index = 0;
                 }
+
                 return m_Sprites[m_Index];
             }
 
@@ -380,12 +401,136 @@ namespace UI
         }
 
 
-        private struct ImageRectInfo
+        private class ImageRectInfo
         {
             public float OffsetY;
             public float VertPosY;
             public Vector2 Size;
             public Vector2 Pos;
         }
+
+        #endregion
+
+
+        #region Href
+
+        private class HrefInfo
+        {
+            public int startIndex;
+
+            public int endIndex;
+
+            public string name;
+
+            public readonly List<Rect> boxes = new List<Rect>();
+        }
+
+
+        /// <summary>
+        /// 超链接信息列表
+        /// </summary>
+        private readonly List<HrefInfo> m_HrefInfos = new List<HrefInfo>();
+
+        private static readonly ObjectPool<HrefInfo> m_HrefInfoPool =
+            new ObjectPool<HrefInfo>(() => new HrefInfo(), null, null);
+
+
+        //<a href=https://blog.csdn.net/weixin_43737238/article/details/104377121>超链接</a>
+        private void RefreshHrefBox(VertexHelper toFill)
+        {
+            UIVertex vert = new UIVertex();
+
+            // 处理超链接包围框
+            foreach (var hrefInfo in m_HrefInfos)
+            {
+                hrefInfo.boxes.Clear();
+                if (hrefInfo.startIndex >= toFill.currentVertCount)
+                {
+                    continue;
+                }
+
+                // 将超链接里面的文本顶点索引坐标加入到包围框
+                toFill.PopulateUIVertex(ref vert, hrefInfo.startIndex);
+                var pos = vert.position;
+                var bounds = new Bounds(pos, Vector3.zero);
+                for (int i = hrefInfo.startIndex, m = hrefInfo.endIndex; i < m; i++)
+                {
+                    if (i >= toFill.currentVertCount)
+                    {
+                        break;
+                    }
+
+                    toFill.PopulateUIVertex(ref vert, i);
+                    pos = vert.position;
+                    if (pos.x < bounds.min.x) // 换行重新添加包围框
+                    {
+                        hrefInfo.boxes.Add(new Rect(bounds.min, bounds.size));
+                        bounds = new Bounds(pos, Vector3.zero);
+                    }
+                    else
+                    {
+                        bounds.Encapsulate(pos); // 扩展包围框
+                    }
+                }
+
+                hrefInfo.boxes.Add(new Rect(bounds.min, bounds.size));
+            }
+        }
+
+        /// <summary>
+        /// 获取超链接解析后的最后输出文本
+        /// </summary>
+        /// <returns></returns>
+        private void RefreshHrefInfo()
+        {
+            var outputText = m_HrefRemoveRegex.Replace(text, "");
+            var matches = s_HrefRegex.Matches(outputText);
+            while (m_HrefInfos.Count < matches.Count)
+            {
+                m_HrefInfos.Add(m_HrefInfoPool.Get());
+            }
+
+            while (m_HrefInfos.Count > matches.Count)
+            {
+                m_HrefInfoPool.Release(m_HrefInfos[^1]);
+                m_HrefInfos.RemoveAt(m_ImageInfos.Count - 1);
+            }
+
+            for (var index = 0; index < matches.Count; index++)
+            {
+                var match = matches[index];
+                var group = match.Groups[1];
+
+                m_HrefInfos[index].startIndex = match.Index * 4; // 超链接里的文本起始顶点索引
+                m_HrefInfos[index].endIndex = (match.Index + match.Groups[2].Length - 1) * 4 + 3;
+                m_HrefInfos[index].name = group.Value;
+            }
+        }
+
+        /// <summary>
+        /// 点击事件检测是否点击到超链接文本
+        /// </summary>
+        /// <param name="eventData"></param>
+        public void OnPointerClick(PointerEventData eventData)
+        {
+            Vector2 lp = Vector2.zero;
+            RectTransformUtility.ScreenPointToLocalPointInRectangle(rectTransform, eventData.position,
+                eventData.pressEventCamera, out lp);
+
+            foreach (var hrefInfo in m_HrefInfos)
+            {
+                var boxes = hrefInfo.boxes;
+                for (var i = 0; i < boxes.Count; ++i)
+                {
+                    if (boxes[i].Contains(lp))
+                    {
+                        Application.OpenURL(hrefInfo.name);
+                        return;
+                    }
+                }
+            }
+        }
+
+        #endregion
     }
 }
