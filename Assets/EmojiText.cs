@@ -47,7 +47,7 @@ namespace UI
 
             m_HaveChange = true;
 
-            UpdateImageInfo();
+            UpdateQuadInfo();
             RefreshHrefInfo();
             m_DisableFontTextureRebuiltCallback = true;
 
@@ -74,9 +74,9 @@ namespace UI
             for (int i = 0; i < vertCount; ++i)
             {
                 var index = i / 4;
-                if (m_ImageIndexDict.TryGetValue(index, out var imageIndex))
+                if (m_QuadIndexDict.TryGetValue(index, out var imageIndex))
                 {
-                    var imageInfo = m_ImageInfos[imageIndex];
+                    var imageInfo = m_QuadInfos[imageIndex];
                     if (i % 4 != 3) continue;
                     var pos = verts[i].position;
 
@@ -103,7 +103,7 @@ namespace UI
             for (int i = 0; i < vertCount; i++)
             {
                 var index = i / 4;
-                if (!m_ImageIndexDict.ContainsKey(index))
+                if (!m_QuadIndexDict.ContainsKey(index))
                 {
                     int tempVertsIndex = i & 3;
                     m_TempVerts[tempVertsIndex] = verts[i];
@@ -138,9 +138,9 @@ namespace UI
 
         private float GetOffsetY(float y)
         {
-            for (var i = 0; i < m_ImageInfos.Count; i++)
+            for (var i = 0; i < m_QuadInfos.Count; i++)
             {
-                var info = m_ImageInfos[i];
+                var info = m_QuadInfos[i];
                 if (Mathf.Abs(info.RectInfo.VertPosY - y) < fontSize)
                 {
                     return info.RectInfo.OffsetY;
@@ -156,12 +156,12 @@ namespace UI
         private void ResetOffsetY()
         {
             var realFontSize = resizeTextForBestFit ? cachedTextGenerator.fontSizeUsedForBestFit : fontSize;
-            for (var i = 0; i < m_ImageInfos.Count; i++)
+            for (var i = 0; i < m_QuadInfos.Count; i++)
             {
-                for (int j = i + 1; j < m_ImageInfos.Count; j++)
+                for (int j = i + 1; j < m_QuadInfos.Count; j++)
                 {
-                    var info1 = m_ImageInfos[i];
-                    var info2 = m_ImageInfos[j];
+                    var info1 = m_QuadInfos[i];
+                    var info2 = m_QuadInfos[j];
                     if (Mathf.Abs(info2.RectInfo.VertPosY - info1.RectInfo.VertPosY) < realFontSize)
                     {
                         var max = info1.RectInfo.OffsetY > info2.RectInfo.OffsetY
@@ -175,6 +175,9 @@ namespace UI
         }
 
 
+        /// <summary>
+        /// 刷新图片
+        /// </summary>
         void UpdateQuad()
         {
             if (!supportRichText)
@@ -243,9 +246,9 @@ namespace UI
                 }
             }
 
-            for (var i = 0; i < m_ImageInfos.Count; i++)
+            for (var i = 0; i < m_QuadInfos.Count; i++)
             {
-                var imagesValue = m_ImageInfos[i];
+                var imagesValue = m_QuadInfos[i];
                 var image = m_ImageObjects[i];
                 image.enabled = true;
                 image.rectTransform.sizeDelta = imagesValue.RectInfo.Size;
@@ -260,22 +263,25 @@ namespace UI
             m_HaveChange = false;
         }
 
-        void UpdateImageInfo()
+        /// <summary>
+        /// 刷新Quad信息
+        /// </summary>
+        void UpdateQuadInfo()
         {
+            m_QuadIndexDict.Clear();
             if (!supportRichText) return;
-            m_ImageIndexDict.Clear();
             var totalLen = 0;
             var newText = m_QuadRemoveRegex.Replace(text, "");
             var matches = m_SpriteTagRegex.Matches(newText);
-            while (m_ImageInfos.Count < matches.Count)
+            while (m_QuadInfos.Count < matches.Count)
             {
-                m_ImageInfos.Add(m_ImageInfoPool.Get());
+                m_QuadInfos.Add(m_ImageInfoPool.Get());
             }
 
-            while (m_ImageInfos.Count > matches.Count)
+            while (m_QuadInfos.Count > matches.Count)
             {
-                m_ImageInfoPool.Release(m_ImageInfos[^1]);
-                m_ImageInfos.RemoveAt(m_ImageInfos.Count - 1);
+                m_ImageInfoPool.Release(m_QuadInfos[^1]);
+                m_QuadInfos.RemoveAt(m_QuadInfos.Count - 1);
             }
 
             for (var i = 0; i < matches.Count; i++)
@@ -291,7 +297,7 @@ namespace UI
                 var width = widthMatch.Success ? float.Parse(widthMatch.Groups[1].Value) : 1;
                 var heightMatch = m_HeightRegex.Match(matchValue);
                 var height = heightMatch.Success ? float.Parse(heightMatch.Groups[1].Value) : 1;
-                var imageInfo = m_ImageInfos[i];
+                var imageInfo = m_QuadInfos[i];
                 imageInfo.Size = size;
                 imageInfo.Width = width;
                 imageInfo.Height = height;
@@ -304,7 +310,7 @@ namespace UI
                     }
                 }
 
-                m_ImageIndexDict.Add(index, i);
+                m_QuadIndexDict.Add(index, i);
             }
         }
 
@@ -313,9 +319,9 @@ namespace UI
             m_Time += Time.deltaTime;
             if (m_Time > m_GifInvadeTime)
             {
-                for (var index = 0; index < m_ImageInfos.Count; index++)
+                for (var index = 0; index < m_QuadInfos.Count; index++)
                 {
-                    var imagesValue = m_ImageInfos[index];
+                    var imagesValue = m_QuadInfos[index];
                     var image = m_ImageObjects[index];
                     if (imagesValue.IsGif)
                     {
@@ -330,15 +336,15 @@ namespace UI
 
         private float m_Time = 0;
         private const float m_GifInvadeTime = 0.1f;
-        private readonly Dictionary<int, int> m_ImageIndexDict = new Dictionary<int, int>();
-        private readonly List<ImageInfo> m_ImageInfos = new List<ImageInfo>();
+        private readonly Dictionary<int, int> m_QuadIndexDict = new Dictionary<int, int>();
+        private readonly List<QuadInfo> m_QuadInfos = new List<QuadInfo>();
         private readonly List<Image> m_ImageObjects = new List<Image>();
         private bool m_HaveChange;
 
-        private static readonly ObjectPool<ImageInfo> m_ImageInfoPool =
-            new ObjectPool<ImageInfo>(() => new ImageInfo(), null, info => info.Clear());
+        private static readonly ObjectPool<QuadInfo> m_ImageInfoPool =
+            new ObjectPool<QuadInfo>(() => new QuadInfo(), null, info => info.Clear());
 
-        private class ImageInfo
+        private class QuadInfo
         {
             public float Size;
             public float Width;
@@ -493,7 +499,7 @@ namespace UI
             while (m_HrefInfos.Count > matches.Count)
             {
                 m_HrefInfoPool.Release(m_HrefInfos[^1]);
-                m_HrefInfos.RemoveAt(m_ImageInfos.Count - 1);
+                m_HrefInfos.RemoveAt(m_QuadInfos.Count - 1);
             }
 
             for (var index = 0; index < matches.Count; index++)
