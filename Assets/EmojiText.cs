@@ -1,6 +1,4 @@
-using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
@@ -152,6 +150,8 @@ namespace UI
                         var max = info1.OffsetY > info2.OffsetY ? info1.OffsetY : info2.OffsetY;
                         info1.OffsetY = max;
                         info2.OffsetY = max;
+                        m_ImageRectInfos[i] = info1;
+                        m_ImageRectInfos[j] = info2;
                     }
                 }
             }
