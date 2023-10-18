@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using UnityEditor;
 using UnityEngine;
 using UnityEngine.Pool;
 using UnityEngine.UI;
@@ -10,7 +11,6 @@ namespace UI
 {
     public class EmojiText : Text
     {
-        public static Func<string, Sprite> OnGetSprite;
 
         private static readonly Regex m_SpriteTagRegex =
             new Regex(@"<quad.*?/>", RegexOptions.Singleline);
@@ -240,6 +240,10 @@ namespace UI
                 image.rectTransform.sizeDelta = m_ImageRectInfos[index].Size;
                 image.rectTransform.anchoredPosition =
                     m_ImageRectInfos[index].Pos - Vector2.up * m_ImageRectInfos[index].OffsetY;
+                if (!imagesValue.IsGif)
+                {
+                    image.sprite = imagesValue.GetFirstSprite();
+                }
             }
 
             m_HaveChange = false;
@@ -252,7 +256,7 @@ namespace UI
             {
                 m_ImageInfoPool.Release(imagesValue);
             }
-            m_ImagesPool.Clear();
+            m_Images.Clear();
             var totalLen = 0;
             var newText = m_RemoveRegex.Replace(text, "");
             var matches = m_SpriteTagRegex.Matches(newText);
@@ -328,7 +332,15 @@ namespace UI
             public void Add(string displayKey)
             {
                 m_DisplayKeys.Add(displayKey);
-                var sprite = OnGetSprite?.Invoke(displayKey);
+                Sprite sprite = null;
+                if (Application.isEditor)
+                {
+                    sprite = AssetDatabase.LoadAssetAtPath<Sprite>($"Assets/Resources/{displayKey}.png");
+                }
+                else if(Application.isPlaying)
+                {
+                    sprite = Resources.Load<Sprite>(displayKey);
+                }
                 if (sprite != null)
                 {
                     m_Sprites.Add(sprite);
