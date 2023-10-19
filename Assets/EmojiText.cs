@@ -1,9 +1,11 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.Networking;
 using UnityEngine.UI;
 
 namespace UI
@@ -30,7 +32,7 @@ namespace UI
 
         private static readonly Regex m_OffsetYRegex =
             new Regex(@"offsety=([-]?\d+(\.\d+)?)", RegexOptions.Singleline);
-        
+
         private static readonly Regex m_GifRegex =
             new Regex(@"gif=(\S+)(?=\.gif)", RegexOptions.Singleline);
 
@@ -332,23 +334,69 @@ namespace UI
                 var offsetX = offsetXMatch.Success ? float.Parse(offsetXMatch.Groups[1].Value) : 0;
                 var offsetYMatch = m_OffsetYRegex.Match(matchValue);
                 var offsetY = offsetYMatch.Success ? float.Parse(offsetYMatch.Groups[1].Value) : 0;
-                var imageInfo = m_QuadInfos[i];
-                imageInfo.Size = size;
-                imageInfo.Width = width;
-                imageInfo.Height = height;
-                imageInfo.OffsetX = offsetX;
-                imageInfo.OffsetY = offsetY;
+                var GifMatch = m_GifRegex.Match(matchValue);
+                var quadInfo = m_QuadInfos[i];
+                quadInfo.Size = size;
+                quadInfo.Width = width;
+                quadInfo.Height = height;
+                quadInfo.OffsetX = offsetX;
+                quadInfo.OffsetY = offsetY;
                 if (displayKeyMatch.Success)
                 {
-                    var displayKeys = displayKeyMatch.Groups[1].Value.Split(',');
-                    foreach (var displayKey in displayKeys)
+                    if (quadInfo.Info != displayKeyMatch.Groups[1].Value)
                     {
-                        imageInfo.Add(displayKey);
+                        var displayKeys = displayKeyMatch.Groups[1].Value.Split(',');
+                        foreach (var displayKey in displayKeys)
+                        {
+                            quadInfo.AddDisplayKey(displayKey);
+                        }
+                        quadInfo.Info = displayKeyMatch.Groups[1].Value;
+                    }
+                   
+                }
+
+                if (GifMatch.Success && !displayKeyMatch.Success)
+                {
+                    var path = GifMatch.Groups[1].Value;
+                    if (quadInfo.Info != path)
+                    {
+                        StartCoroutine(GetGif(path, quadInfo));
+                        quadInfo.Info = path;
                     }
                 }
 
                 m_QuadIndexDict.Add(index, i);
             }
+        }
+
+        private IEnumerator GetGif(string path, QuadInfo quadInfo)
+        {
+
+            path = Path.Combine("file:///" + Application.streamingAssetsPath, path + ".gif");
+           
+            if (Application.isPlaying)
+            {
+                UnityWebRequest request = UnityWebRequest.Get(path);
+                request.SendWebRequest();
+                while (!request.isDone)
+                {
+                    yield return null;
+                }
+                
+                yield return StartCoroutine(UniGif.GetTextureListCoroutine(request.downloadHandler.data,
+                    (gifTexList, loopCount, width, height) =>
+                    {
+                        request.Dispose();
+                        for (var i = 0; i < gifTexList.Count; i++)
+                        {
+                            var texture = gifTexList[i];
+                            var sprite = Sprite.Create(texture.Texture2d, new Rect(0, 0, width, height),
+                                new Vector2(0.5f, 0.5f));
+                            quadInfo.AddSprite(sprite);
+                        }
+                    }));
+            }
+            
         }
 
         private void UpdateGif()
@@ -379,10 +427,11 @@ namespace UI
         private bool m_HaveChange;
 
         private static readonly UnityEngine.Pool.ObjectPool<QuadInfo> m_ImageInfoPool =
-            new UnityEngine.Pool.ObjectPool<QuadInfo>(() => new QuadInfo(), null, info => info.Clear());
+            new UnityEngine.Pool.ObjectPool<QuadInfo>(() => new QuadInfo(), null, null);
 
         private class QuadInfo
         {
+            public string Info = "";
             public float Size;
             public float Width;
             public float Height;
@@ -391,13 +440,18 @@ namespace UI
             public float sizeX => Size * (Width / Height);
             public float sizeY => Size;
 
-            public ImageRectInfo RectInfo = new ImageRectInfo();
+            public QuadRectInfo RectInfo = new QuadRectInfo();
 
-            public void Add(string displayKey)
+            public void AddDisplayKey(string displayKey)
             {
                 m_DisplayKeys.Add(displayKey);
 
                 m_Sprites.Add(null);
+            }
+
+            public void AddSprite(Sprite sprite)
+            {
+                m_Sprites.Add(sprite);
             }
 
             private IEnumerator GetSprite(Image image, string displayKey)
@@ -412,13 +466,15 @@ namespace UI
                 {
                     yield return null;
                 }
-                image.sprite = handle.asset as Sprite;
+
+                if (image != null) image.sprite = handle.asset as Sprite;
             }
 
             public void SetImage(Image image)
             {
                 if (m_DisplayKeys.Count == 0 || image == null) return;
-                image.StartCoroutine(GetSprite(image,m_DisplayKeys[0]));
+                m_Index = 0;
+                image.StartCoroutine(GetSprite(image, m_DisplayKeys[0]));
                 //UITools.SetImageWithDisplayKey(image, m_DisplayKeys[0]);
             }
 
@@ -432,11 +488,28 @@ namespace UI
 
             public void GetNextSprite(Image image)
             {
-                if (image.sprite == null) return;
-                if (m_DisplayKeys.Count == 0) return;
-                m_Sprites[m_Index] = image.sprite;
-                m_Index++;
-                if (m_Index >= m_DisplayKeys.Count)
+                if (m_DisplayKeys.Count != 0)
+                {
+                    if (image.sprite == null) return;
+                    if(m_Sprites[m_Index] == null)m_Sprites[m_Index] = image.sprite;
+                    m_Index++;
+                    if (m_Index >= m_DisplayKeys.Count)
+                    {
+                        m_Index = 0;
+                    }
+
+                    if (m_Sprites[m_Index] != null)
+                    {
+                        image.sprite = m_Sprites[m_Index];
+                        return;
+                    }
+
+                    image.StartCoroutine(GetSprite(image, m_DisplayKeys[m_Index]));
+                    return;
+                }
+
+                if (m_Sprites.Count <= 0) return;
+                if (m_Index >= m_Sprites.Count)
                 {
                     m_Index = 0;
                 }
@@ -444,24 +517,24 @@ namespace UI
                 if (m_Sprites[m_Index] != null)
                 {
                     image.sprite = m_Sprites[m_Index];
-                    return;
                 }
 
-                image.StartCoroutine(GetSprite(image,m_DisplayKeys[m_Index]));
+                m_Index++;
+
                 //UITools.SetImageWithDisplayKey(image, m_DisplayKeys[m_Index]);
             }
 
 
             public bool IsGif => m_Sprites.Count > 1;
 
-            private List<string> m_DisplayKeys = new List<string>();
-            private List<Sprite> m_Sprites = new List<Sprite>();
+            private readonly List<string> m_DisplayKeys = new List<string>();
+            private readonly List<Sprite> m_Sprites = new List<Sprite>();
 
             private int m_Index = 0;
         }
 
 
-        private class ImageRectInfo
+        private class QuadRectInfo
         {
             public float OffsetY;
             public float VertPosY;

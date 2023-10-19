@@ -229,7 +229,7 @@ public static partial class UniGif
         if (useBeforeIndex >= 0)
         {
             filledTexture = true;
-            Color32[] pix = gifTexList[useBeforeIndex].m_texture2d.GetPixels32();
+            Color32[] pix = gifTexList[useBeforeIndex].Texture2d.GetPixels32();
             tex.SetPixels32(pix);
             tex.Apply();
         }

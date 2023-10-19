@@ -18,14 +18,14 @@ public static partial class UniGif
     public class GifTexture
     {
         // Texture
-        public Texture2D m_texture2d;
+        public Texture2D Texture2d;
         // Delay time until the next texture.
-        public float m_delaySec;
+        public float DelaySec;
 
         public GifTexture(Texture2D texture2d, float delaySec)
         {
-            m_texture2d = texture2d;
-            m_delaySec = delaySec;
+            Texture2d = texture2d;
+            DelaySec = delaySec;
         }
     }
 
