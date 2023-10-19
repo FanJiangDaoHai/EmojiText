@@ -341,18 +341,21 @@ namespace UI
                 quadInfo.Height = height;
                 quadInfo.OffsetX = offsetX;
                 quadInfo.OffsetY = offsetY;
+                 bool isMatchQuadImage = false; 
                 if (displayKeyMatch.Success)
                 {
                     if (quadInfo.Info != displayKeyMatch.Groups[1].Value)
                     {
                         var displayKeys = displayKeyMatch.Groups[1].Value.Split(',');
+                        quadInfo.Clear();
                         foreach (var displayKey in displayKeys)
                         {
                             quadInfo.AddDisplayKey(displayKey);
                         }
                         quadInfo.Info = displayKeyMatch.Groups[1].Value;
                     }
-                   
+
+                    isMatchQuadImage = true;
                 }
 
                 if (GifMatch.Success && !displayKeyMatch.Success)
@@ -360,11 +363,14 @@ namespace UI
                     var path = GifMatch.Groups[1].Value;
                     if (quadInfo.Info != path)
                     {
+                        quadInfo.Clear();
                         StartCoroutine(GetGif(path, quadInfo));
                         quadInfo.Info = path;
                     }
-                }
 
+                    isMatchQuadImage = true;
+                }
+                if(!isMatchQuadImage)quadInfo.Clear();
                 m_QuadIndexDict.Add(index, i);
             }
         }
