@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using UnityEditor;
@@ -29,6 +30,9 @@ namespace UI
 
         private static readonly Regex m_OffsetYRegex =
             new Regex(@"offsety=([-]?\d+(\.\d+)?)", RegexOptions.Singleline);
+        
+        private static readonly Regex m_GifRegex =
+            new Regex(@"gif=(\S+)(?=\.gif)", RegexOptions.Singleline);
 
         private static readonly Regex m_QuadRemoveRegex =
             new Regex(
@@ -284,10 +288,7 @@ namespace UI
                     imagesValue.RectInfo.Pos - Vector2.up * imagesValue.RectInfo.OffsetY;
                 image.rectTransform.anchoredPosition += Vector2.right * imagesValue.OffsetX;
                 image.rectTransform.anchoredPosition += Vector2.up * imagesValue.OffsetY;
-                if (!imagesValue.IsGif)
-                {
-                    imagesValue.SetImage(image);
-                }
+                imagesValue.SetImage(image);
             }
 
             m_HaveChange = false;
@@ -399,20 +400,25 @@ namespace UI
                 m_Sprites.Add(null);
             }
 
-            private Sprite GetSprite(string displayKey)
+            private IEnumerator GetSprite(Image image, string displayKey)
             {
                 if (Application.isEditor)
                 {
-                    return AssetDatabase.LoadAssetAtPath<Sprite>($"Assets/Resources/{displayKey}.png");
+                    image.sprite = AssetDatabase.LoadAssetAtPath<Sprite>($"Assets/Resources/{displayKey}.png");
                 }
 
-                return Resources.Load<Sprite>(displayKey);
+                var handle = Resources.LoadAsync<Sprite>(displayKey);
+                while (!handle.isDone)
+                {
+                    yield return null;
+                }
+                image.sprite = handle.asset as Sprite;
             }
 
             public void SetImage(Image image)
             {
-                if (m_DisplayKeys.Count == 0) return;
-                image.sprite = GetSprite(m_DisplayKeys[0]);
+                if (m_DisplayKeys.Count == 0 || image == null) return;
+                image.StartCoroutine(GetSprite(image,m_DisplayKeys[0]));
                 //UITools.SetImageWithDisplayKey(image, m_DisplayKeys[0]);
             }
 
@@ -441,7 +447,7 @@ namespace UI
                     return;
                 }
 
-                image.sprite = GetSprite(m_DisplayKeys[m_Index]);
+                image.StartCoroutine(GetSprite(image,m_DisplayKeys[m_Index]));
                 //UITools.SetImageWithDisplayKey(image, m_DisplayKeys[m_Index]);
             }
 
@@ -547,7 +553,7 @@ namespace UI
             while (m_HrefInfos.Count > matches.Count)
             {
                 m_HrefInfoPool.Release(m_HrefInfos[^1]);
-                m_HrefInfos.RemoveAt(m_QuadInfos.Count - 1);
+                m_HrefInfos.RemoveAt(m_HrefInfos.Count - 1);
             }
 
             for (var index = 0; index < matches.Count; index++)
