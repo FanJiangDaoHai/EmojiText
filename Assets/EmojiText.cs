@@ -3,7 +3,6 @@ using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.EventSystems;
-using UnityEngine.Pool;
 using UnityEngine.UI;
 
 namespace UI
@@ -24,6 +23,12 @@ namespace UI
 
         private static readonly Regex m_HeightRegex =
             new Regex(@"height=(\d*\.?\d+%?)", RegexOptions.Singleline);
+
+        private static readonly Regex m_OffsetXRegex =
+            new Regex(@"offsetx=([-]?\d+(\.\d+)?)", RegexOptions.Singleline);
+
+        private static readonly Regex m_OffsetYRegex =
+            new Regex(@"offsety=([-]?\d+(\.\d+)?)", RegexOptions.Singleline);
 
         private static readonly Regex m_QuadRemoveRegex =
             new Regex(
@@ -71,11 +76,32 @@ namespace UI
             Vector2 roundingOffset = new Vector2(verts[0].position.x, verts[0].position.y) * unitsPerPixel;
             roundingOffset = PixelAdjustPoint(roundingOffset) - roundingOffset;
             toFill.Clear();
+            Vector3 tempPos = default;
+            int indexOffset = 0;
+            var endOffset = 0;
             for (int i = 0; i < vertCount; ++i)
             {
-                var index = i / 4;
+                var temp = i & 3;
+                if (temp == 1)
+                {
+                    tempPos = verts[i].position;
+                }
+
+                //这里又是一个Unity的Bug，文字超框时，会出现一个空的Quad，这里做一个简单的处理
+                if (temp == 3)
+                {
+                    var pos = tempPos - verts[i].position;
+                    if (pos.x < 0.000001f || pos.y < 0.000001f)
+                    {
+                        indexOffset += 1;
+                        continue;
+                    }
+                }
+
+                var index = i / 4 - indexOffset;
                 if (m_QuadIndexDict.TryGetValue(index, out var imageIndex))
                 {
+                    endOffset = indexOffset;
                     var imageInfo = m_QuadInfos[imageIndex];
                     if (i % 4 != 3) continue;
                     var pos = verts[i].position;
@@ -96,6 +122,8 @@ namespace UI
                         pos.y + imageInfo.sizeY / 2 * bestScale) * unitsPerPixel;
                     imageInfo.RectInfo.Size = new Vector2(imageInfo.sizeX * bestScale, imageInfo.sizeY * bestScale) *
                                               unitsPerPixel;
+                    imageInfo.OffsetX *= bestScale * unitsPerPixel;
+                    imageInfo.OffsetY *= bestScale * unitsPerPixel;
                 }
             }
 
@@ -103,7 +131,7 @@ namespace UI
             for (int i = 0; i < vertCount; i++)
             {
                 var index = i / 4;
-                if (!m_QuadIndexDict.ContainsKey(index))
+                if (!m_QuadIndexDict.ContainsKey(index - endOffset))
                 {
                     int tempVertsIndex = i & 3;
                     m_TempVerts[tempVertsIndex] = verts[i];
@@ -254,9 +282,11 @@ namespace UI
                 image.rectTransform.sizeDelta = imagesValue.RectInfo.Size;
                 image.rectTransform.anchoredPosition =
                     imagesValue.RectInfo.Pos - Vector2.up * imagesValue.RectInfo.OffsetY;
+                image.rectTransform.anchoredPosition += Vector2.right * imagesValue.OffsetX;
+                image.rectTransform.anchoredPosition += Vector2.up * imagesValue.OffsetY;
                 if (!imagesValue.IsGif)
                 {
-                    image.sprite = imagesValue.GetFirstSprite();
+                    imagesValue.SetImage(image);
                 }
             }
 
@@ -297,10 +327,16 @@ namespace UI
                 var width = widthMatch.Success ? float.Parse(widthMatch.Groups[1].Value) : 1;
                 var heightMatch = m_HeightRegex.Match(matchValue);
                 var height = heightMatch.Success ? float.Parse(heightMatch.Groups[1].Value) : 1;
+                var offsetXMatch = m_OffsetXRegex.Match(matchValue);
+                var offsetX = offsetXMatch.Success ? float.Parse(offsetXMatch.Groups[1].Value) : 0;
+                var offsetYMatch = m_OffsetYRegex.Match(matchValue);
+                var offsetY = offsetYMatch.Success ? float.Parse(offsetYMatch.Groups[1].Value) : 0;
                 var imageInfo = m_QuadInfos[i];
                 imageInfo.Size = size;
                 imageInfo.Width = width;
                 imageInfo.Height = height;
+                imageInfo.OffsetX = offsetX;
+                imageInfo.OffsetY = offsetY;
                 if (displayKeyMatch.Success)
                 {
                     var displayKeys = displayKeyMatch.Groups[1].Value.Split(',');
@@ -325,7 +361,7 @@ namespace UI
                     var image = m_ImageObjects[index];
                     if (imagesValue.IsGif)
                     {
-                        image.sprite = imagesValue.GetNextSprite();
+                        imagesValue.GetNextSprite(image);
                     }
                 }
 
@@ -341,14 +377,16 @@ namespace UI
         private readonly List<Image> m_ImageObjects = new List<Image>();
         private bool m_HaveChange;
 
-        private static readonly ObjectPool<QuadInfo> m_ImageInfoPool =
-            new ObjectPool<QuadInfo>(() => new QuadInfo(), null, info => info.Clear());
+        private static readonly UnityEngine.Pool.ObjectPool<QuadInfo> m_ImageInfoPool =
+            new UnityEngine.Pool.ObjectPool<QuadInfo>(() => new QuadInfo(), null, info => info.Clear());
 
         private class QuadInfo
         {
             public float Size;
             public float Width;
             public float Height;
+            public float OffsetX;
+            public float OffsetY;
             public float sizeX => Size * (Width / Height);
             public float sizeY => Size;
 
@@ -357,21 +395,27 @@ namespace UI
             public void Add(string displayKey)
             {
                 m_DisplayKeys.Add(displayKey);
-                Sprite sprite = null;
+
+                m_Sprites.Add(null);
+            }
+
+            private Sprite GetSprite(string displayKey)
+            {
                 if (Application.isEditor)
                 {
-                    sprite = AssetDatabase.LoadAssetAtPath<Sprite>($"Assets/Resources/{displayKey}.png");
-                }
-                else if (Application.isPlaying)
-                {
-                    sprite = Resources.Load<Sprite>(displayKey);
+                    return AssetDatabase.LoadAssetAtPath<Sprite>($"Assets/Resources/{displayKey}.png");
                 }
 
-                if (sprite != null)
-                {
-                    m_Sprites.Add(sprite);
-                }
+                return Resources.Load<Sprite>(displayKey);
             }
+
+            public void SetImage(Image image)
+            {
+                if (m_DisplayKeys.Count == 0) return;
+                image.sprite = GetSprite(m_DisplayKeys[0]);
+                //UITools.SetImageWithDisplayKey(image, m_DisplayKeys[0]);
+            }
+
 
             public void Clear()
             {
@@ -380,23 +424,27 @@ namespace UI
                 m_Index = 0;
             }
 
-            public Sprite GetNextSprite()
+            public void GetNextSprite(Image image)
             {
-                if (m_Sprites.Count == 0) return null;
+                if (image.sprite == null) return;
+                if (m_DisplayKeys.Count == 0) return;
+                m_Sprites[m_Index] = image.sprite;
                 m_Index++;
-                if (m_Index >= m_Sprites.Count)
+                if (m_Index >= m_DisplayKeys.Count)
                 {
                     m_Index = 0;
                 }
 
-                return m_Sprites[m_Index];
+                if (m_Sprites[m_Index] != null)
+                {
+                    image.sprite = m_Sprites[m_Index];
+                    return;
+                }
+
+                image.sprite = GetSprite(m_DisplayKeys[m_Index]);
+                //UITools.SetImageWithDisplayKey(image, m_DisplayKeys[m_Index]);
             }
 
-            public Sprite GetFirstSprite()
-            {
-                if (m_Sprites.Count == 0) return null;
-                return m_Sprites[0];
-            }
 
             public bool IsGif => m_Sprites.Count > 1;
 
@@ -437,8 +485,8 @@ namespace UI
         /// </summary>
         private readonly List<HrefInfo> m_HrefInfos = new List<HrefInfo>();
 
-        private static readonly ObjectPool<HrefInfo> m_HrefInfoPool =
-            new ObjectPool<HrefInfo>(() => new HrefInfo(), null, null);
+        private static readonly UnityEngine.Pool.ObjectPool<HrefInfo> m_HrefInfoPool =
+            new UnityEngine.Pool.ObjectPool<HrefInfo>(() => new HrefInfo(), null, null);
 
 
         //<a href=https://blog.csdn.net/weixin_43737238/article/details/104377121>超链接</a>
